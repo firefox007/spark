@@ -3,7 +3,7 @@ package spark.executor
 import java.nio.ByteBuffer
 import spark.Logging
 import spark.TaskState.TaskState
-import spark.util.AkkaUtils
+import spark.util.{TokenDeSerUtils, AkkaUtils}
 import akka.actor.{ActorRef, Actor, ActorSystem, Props, Terminated}
 import akka.remote.{RemoteClientLifeCycleEvent, RemoteClientShutdown, RemoteClientDisconnected}
 import java.util.concurrent.{TimeUnit, ThreadPoolExecutor, SynchronousQueue}
@@ -13,6 +13,8 @@ import spark.scheduler.cluster.LaunchTask
 import spark.scheduler.cluster.RegisterExecutorFailed
 import spark.scheduler.cluster.RegisterExecutor
 import spark.scheduler.cluster.StopExecutor
+import org.apache.hadoop.security.UserGroupInformation
+import java.security.PrivilegedExceptionAction
 
 private[spark] class StandaloneExecutorBackend(
     driverUrl: String,
@@ -81,12 +83,34 @@ private[spark] object StandaloneExecutorBackend {
   def run(driver: String, worker: Option[String], execId: String, hostname: String, cores: Int) {
     // Create a new ActorSystem to run the backend, because we can't create a SparkEnv / Executor
     // before getting started with all our system properties, etc
-    val (actorSystem, boundPort) = AkkaUtils.createActorSystem("sparkExecutor", hostname, 0)
-    val actor = actorSystem.actorOf(
-      Props(new StandaloneExecutorBackend(driver, worker, execId, hostname, cores, actorSystem)),
-      name = "Executor")
-    actorSystem.awaitTermination()
+    val username = System.getenv("CURRENT_USER")
+    val tokenString = System.getenv("TOKEN")
+    if(!username.isEmpty && !tokenString.isEmpty){
+      val token = TokenDeSerUtils.deserialize(System.getenv("TOKEN"))
+      val realUserUgi = UserGroupInformation.createRemoteUser(username)
+      realUserUgi.setAuthenticationMethod(UserGroupInformation.AuthenticationMethod.TOKEN)
+      realUserUgi.addToken(token)
+      realUserUgi.doAs(new PrivilegedExceptionAction[AnyRef] {
+        def run: AnyRef = {
+          runImpl
+          null
+        }
+      })
+    }
+    else{
+      runImpl
+    }
+
+    def runImpl {
+      val (actorSystem, boundPort) = AkkaUtils.createActorSystem("sparkExecutor", hostname, 0)
+      val actor = actorSystem.actorOf(
+        Props(new StandaloneExecutorBackend(driver, worker, execId, hostname, cores, actorSystem)),
+        name = "Executor")
+      actorSystem.awaitTermination()
+    }
   }
+
+
 
   def main(args: Array[String]) {
     if (args.length < 4) {

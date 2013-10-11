@@ -40,8 +40,11 @@ import spark.scheduler.local.LocalScheduler
 import spark.scheduler.cluster.{SparkDeploySchedulerBackend, SchedulerBackend, ClusterScheduler}
 import spark.scheduler.mesos.{CoarseMesosSchedulerBackend, MesosSchedulerBackend}
 import spark.storage.BlockManagerUI
-import spark.util.{MetadataCleaner, TimeStampedHashMap}
+import spark.util.{TokenDeSerUtils, MetadataCleaner, TimeStampedHashMap}
 import spark.storage.{StorageStatus, StorageUtils, RDDInfo}
+import org.apache.hadoop.security.{Credentials, UserGroupInformation}
+import org.apache.hadoop.mapreduce.security.TokenCache
+import org.apache.hadoop.security.token.TokenIdentifier
 
 /**
  * Main entry point for Spark functionality. A SparkContext represents the connection to a Spark
@@ -113,6 +116,22 @@ class SparkContext(
   // Since memory can be set with a system property too, use that
   executorEnvs("SPARK_MEM") = SparkContext.executorMemoryRequested + "m"
   executorEnvs ++= environment
+
+  //add current username & delegation token to executorEnvs
+  //TODO add core-site.xml and add hdfs.sample.path to the file
+  val username: String = UserGroupInformation.getCurrentUser.getShortUserName
+  executorEnvs("CURRENT_USER") = username
+  val credentials: Credentials = new Credentials()
+  val conf: Configuration = new Configuration()
+  val path: Path = new Path(conf.get("hdfs.sample.path"))
+  TokenCache.obtainTokensForNamenodes(credentials, Array(path), conf)
+  val tokens = credentials.getAllTokens
+  if(tokens.size() == 1){
+    executorEnvs("TOKEN") = TokenDeSerUtils.serialize(tokens.head)
+  }
+  else{
+    logWarning("Error in obtain token of " + username + " for " + path)
+  }
 
   // Create and start the scheduler
   private var taskScheduler: TaskScheduler = {

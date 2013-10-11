@@ -141,7 +141,7 @@ private[spark] class ClusterScheduler(val sc: SparkContext)
       for (o <- offers) {
         executorIdToHost(o.executorId) = o.hostname
         if (!executorsByHost.contains(o.hostname)) {
-          executorsByHost(o.hostname) = new HashSet()
+          executorsByHost(o.hostname) = new HashSet[String]()
         }
       }
       // Build a list of tasks to assign to each slave
